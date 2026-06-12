@@ -44,43 +44,74 @@ async function initStorage() {
 }
 
 // ── Job filters ───────────────────────────────────────────────────────────────
-const EXCLUDE_KEYWORDS = [
+
+// Senior/high-grade medical roles to exclude
+const EXCLUDE_SENIORITY = [
   "consultant", "registrar", "senior", "sr.", "sr ",
-  "director", "lead", "head of", "chief", "specialist",
+  "director", "head of", "chief", "professor",
   "associate specialist", "specialty registrar", "locum consultant",
-  "clinical director", "medical director", "professor"
+  "clinical director", "medical director", "specialist doctor",
+  "higher specialty", "hst", "st3", "st4", "st5", "st6", "st7", "st8"
 ];
 
-const INCLUDE_GRADE_KEYWORDS = [
-  "foundation", "junior", "fy1", "fy2", "f1", "f2",
-  "sho", "ct1", "ct2", "ct3", "core trainee",
-  "gp trainee", "gp st", "gpst",
-  "trust grade", "trust doctor", "clinical fellow",
-  "junior clinical fellow", "house officer",
-  "junior doctor", "trainee", "locum sho",
-  "staff grade", "specialty doctor",
-  "associate dentist", "dental core trainee", "dct",
-  "foundation dentist", "vt", "vocational trainee"
+// Non-medical professions to exclude entirely
+const EXCLUDE_PROFESSIONS = [
+  // Dental
+  "dent", "dental", "dentist", "orthodont",
+  // Nursing & Midwifery
+  "nurse", "nursing", "midwife", "midwifery",
+  "health visitor", "district nurse", "practice nurse",
+  // Allied Health
+  "pharmacist", "pharmacy", "physiotherap", "radiograph",
+  "occupational therapist", "speech", "dietitian", "podiatrist",
+  "optometrist", "orthoptist", "paramedic", "ambulance",
+  "biomedical scientist", "clinical scientist",
+  // Mental health non-doctor
+  "psychologist", "psychotherapist", "counsellor",
+  // Admin / Support / Other
+  "administrator", "receptionist", "porter", "cleaner", "housekeeper",
+  "manager", "coordinator", "secretary", "finance", "human resources",
+  "it support", "engineer", "estates", "facilities",
+  // Other clinical non-doctor
+  "healthcare assistant", "hca", "support worker", "care assistant",
+  "theatre practitioner", "scrub practitioner", "anaesthetic practitioner",
+  "physician associate", "advanced nurse practitioner",
+  "advanced clinical practitioner"
 ];
 
-function isExcluded(title) {
-  const t = title.toLowerCase();
-  return EXCLUDE_KEYWORDS.some(kw => t.includes(kw));
-}
-
-function isIncluded(title) {
-  const t = title.toLowerCase();
-  // If no specific grade keywords, still allow if not excluded (catch-all for non-senior roles)
-  return INCLUDE_GRADE_KEYWORDS.some(kw => t.includes(kw));
-}
+// Junior doctor grade keywords
+const INCLUDE_DOCTOR_GRADES = [
+  "fy1", "fy2", "f1 ", "f2 ", "foundation year",
+  "foundation doctor", "foundation programme",
+  "sho", "senior house officer",
+  "ct1", "ct2", "ct3", "core trainee", "core medical",
+  "core surgical", "core psychiatry",
+  "gp trainee", "gp st1", "gp st2", "gp st3", "gpst",
+  "trust grade doctor", "trust grade", "trust doctor",
+  "clinical fellow", "junior clinical fellow",
+  "house officer", "junior doctor",
+  "locum sho", "locum fy",
+  "st1", "st2",
+  "staff grade doctor", "specialty doctor"
+];
 
 function shouldIncludeJob(title, grade) {
   const combined = `${title} ${grade || ""}`.toLowerCase();
-  if (EXCLUDE_KEYWORDS.some(kw => combined.includes(kw))) return false;
-  // Include if it matches a junior keyword OR if grade field looks junior
-  if (INCLUDE_GRADE_KEYWORDS.some(kw => combined.includes(kw))) return true;
-  // If no grade info available, include if not explicitly senior
-  return true;
+
+  // Step 1: exclude non-medical professions entirely
+  if (EXCLUDE_PROFESSIONS.some(kw => combined.includes(kw))) return false;
+
+  // Step 2: exclude senior medical roles
+  if (EXCLUDE_SENIORITY.some(kw => combined.includes(kw))) return false;
+
+  // Step 3: include if matches junior doctor keyword
+  if (INCLUDE_DOCTOR_GRADES.some(kw => combined.includes(kw))) return true;
+
+  // Step 4: if title contains "doctor" or "physician" but no seniority flag, include
+  if (combined.includes("doctor") || combined.includes("physician")) return true;
+
+  // Step 5: default — exclude if we can't confirm it's a junior doctor role
+  return false;
 }
 
 // ── Scraper ───────────────────────────────────────────────────────────────────
@@ -103,7 +134,6 @@ async function scrapeJobs() {
     const $ = cheerio.load(data);
     const jobs = [];
 
-    // HealthJobsUK job listing selectors
     $(".job, .vacancy, article.job-result, .search-result-item, [class*='job-listing'], [class*='vacancy-item']").each((i, el) => {
       const $el = $(el);
       const titleEl = $el.find("h2, h3, .job-title, .vacancy-title, a[href*='/job/'], a[href*='/vacancy/']").first();
@@ -120,37 +150,21 @@ async function scrapeJobs() {
       }
     });
 
-    // Fallback: try generic link-based scraping if the above finds nothing
     if (jobs.length === 0) {
       $("a[href*='/job/'], a[href*='/vacancy/'], a[href*='job_view']").each((i, el) => {
         const $el = $(el);
         const title = $el.text().trim();
         const href = $el.attr("href") || "";
         const jobId = href.match(/[?&](?:id|job_id|JobID)=(\d+)/)?.[1] || href.match(/\/(\d+)/)?.[1];
-        const $row = $el.closest("tr, li, div, article");
-        const rowText = $row.text();
-        const employer = "";
-        const location = "";
-        const grade = "";
-
         if (title && title.length > 5 && jobId) {
-          jobs.push({
-            id: jobId,
-            title,
-            employer,
-            location,
-            grade,
-            closing: "",
-            url: href.startsWith("http") ? href : `https://www.healthjobsuk.com${href}`
-          });
+          jobs.push({ id: jobId, title, employer: "", location: "", grade: "", closing: "", url: href.startsWith("http") ? href : `https://www.healthjobsuk.com${href}` });
         }
       });
     }
 
-    // Also try table rows (common pattern on NHS job boards)
     if (jobs.length === 0) {
       $("table tr").each((i, el) => {
-        if (i === 0) return; // skip header
+        if (i === 0) return;
         const $el = $(el);
         const cells = $el.find("td");
         if (cells.length < 2) return;
@@ -159,26 +173,20 @@ async function scrapeJobs() {
         const title = link.text().trim() || titleCell.text().trim();
         const href = link.attr("href") || "";
         const jobId = href.match(/\d+/)?.[0] || `job-${i}`;
-        const employer = cells.eq(1).text().trim();
-        const location = cells.eq(2)?.text().trim() || "";
-        const grade = cells.eq(3)?.text().trim() || "";
-        const closing = cells.eq(4)?.text().trim() || "";
-
         if (title && title.length > 5) {
           jobs.push({
-            id: jobId,
-            title,
-            employer,
-            location,
-            grade,
-            closing,
+            id: jobId, title,
+            employer: cells.eq(1).text().trim(),
+            location: cells.eq(2)?.text().trim() || "",
+            grade: cells.eq(3)?.text().trim() || "",
+            closing: cells.eq(4)?.text().trim() || "",
             url: href.startsWith("http") ? href : `https://www.healthjobsuk.com${href}`
           });
         }
       });
     }
 
-    return { jobs, raw: data.substring(0, 500) }; // return snippet for debugging
+    return { jobs };
   } catch (err) {
     console.error("[Scraper] Error:", err.message);
     return { jobs: [], error: err.message };
@@ -203,9 +211,7 @@ async function sendEmailAlert(recipient, newJobs) {
   }
 
   const transporter = createTransporter();
-  const jobRows = newJobs
-    .map(
-      j => `
+  const jobRows = newJobs.map(j => `
       <tr style="border-bottom:1px solid #e5e7eb;">
         <td style="padding:12px 8px;">
           <a href="${j.url}" style="color:#0f6cbd;font-weight:600;text-decoration:none;">${j.title}</a>
@@ -214,9 +220,7 @@ async function sendEmailAlert(recipient, newJobs) {
         <td style="padding:12px 8px;color:#374151;">${j.employer || "—"}</td>
         <td style="padding:12px 8px;color:#374151;">${j.location || "—"}</td>
         <td style="padding:12px 8px;color:#374151;">${j.closing || "—"}</td>
-      </tr>`
-    )
-    .join("");
+      </tr>`).join("");
 
   const html = `
 <!DOCTYPE html>
@@ -225,8 +229,8 @@ async function sendEmailAlert(recipient, newJobs) {
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;margin:0;padding:24px;">
   <div style="max-width:700px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
     <div style="background:linear-gradient(135deg,#0f4c8a,#1e7fc4);padding:28px 32px;">
-      <h1 style="color:#fff;margin:0;font-size:22px;">🏥 New Medical/Dental Jobs Found</h1>
-      <p style="color:#bfdbfe;margin:6px 0 0;">${newJobs.length} new junior/non-senior position${newJobs.length > 1 ? "s" : ""} on HealthJobsUK</p>
+      <h1 style="color:#fff;margin:0;font-size:22px;">🏥 New Junior Doctor Jobs Found</h1>
+      <p style="color:#bfdbfe;margin:6px 0 0;">${newJobs.length} new position${newJobs.length > 1 ? "s" : ""} on HealthJobsUK</p>
     </div>
     <div style="padding:24px 32px;">
       <table style="width:100%;border-collapse:collapse;font-size:14px;">
@@ -248,7 +252,7 @@ async function sendEmailAlert(recipient, newJobs) {
       </div>
     </div>
     <div style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e5e7eb;">
-      <p style="margin:0;font-size:12px;color:#9ca3af;">Sent by HealthJobsUK Alert System · <a href="#" style="color:#9ca3af;">Manage alerts</a></p>
+      <p style="margin:0;font-size:12px;color:#9ca3af;">Sent by HealthJobsUK Alert System</p>
     </div>
   </div>
 </body>
@@ -258,7 +262,7 @@ async function sendEmailAlert(recipient, newJobs) {
     await transporter.sendMail({
       from: `"HealthJobs Alert 🏥" <${process.env.GMAIL_USER}>`,
       to: recipient.email,
-      subject: `🏥 ${newJobs.length} New Junior Medical Job${newJobs.length > 1 ? "s" : ""} on HealthJobsUK`,
+      subject: `🏥 ${newJobs.length} New Junior Doctor Job${newJobs.length > 1 ? "s" : ""} on HealthJobsUK`,
       html
     });
     console.log(`[Email] Sent to ${recipient.email} — ${newJobs.length} jobs`);
@@ -273,7 +277,7 @@ async function sendEmailAlert(recipient, newJobs) {
 async function sendTelegramAlert(recipient, newJobs) {
   if (!recipient.telegramChatId || !process.env.TELEGRAM_BOT_TOKEN) return false;
   const lines = newJobs.map(j => `• <a href="${j.url}">${j.title}</a>${j.employer ? `\n  📍 ${j.employer}` : ""}${j.grade ? `\n  🎓 ${j.grade}` : ""}`).join("\n\n");
-  const text = `🏥 <b>${newJobs.length} New Junior Medical Job${newJobs.length > 1 ? "s" : ""}</b>\n\n${lines}`;
+  const text = `🏥 <b>${newJobs.length} New Junior Doctor Job${newJobs.length > 1 ? "s" : ""}</b>\n\n${lines}`;
   try {
     await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: recipient.telegramChatId,
@@ -306,7 +310,6 @@ async function runScan() {
 
   console.log(`[Scan] Found ${jobs.length} total jobs before filtering`);
 
-  // Filter jobs
   const filtered = jobs.filter(j => shouldIncludeJob(j.title, j.grade));
   console.log(`[Scan] ${filtered.length} jobs after filtering`);
 
@@ -320,13 +323,11 @@ async function runScan() {
 
   console.log(`[Scan] ${newJobs.length} NEW jobs detected`);
 
-  // Mark as seen
   newJobs.forEach(j => {
     seenJobs[j.id] = { seenAt: new Date().toISOString(), title: j.title };
   });
   await storage.setItem("seenJobs", seenJobs);
 
-  // Update stats
   settings.totalJobsFound = (settings.totalJobsFound || 0) + newJobs.length;
   await storage.setItem("settings", settings);
 
@@ -335,10 +336,8 @@ async function runScan() {
     return;
   }
 
-  // Send alerts
   const recipients = (await storage.getItem("recipients")) || [];
   const activeRecipients = recipients.filter(r => r.active);
-
   const alertLog = (await storage.getItem("alertLog")) || [];
 
   for (const recipient of activeRecipients) {
@@ -360,7 +359,6 @@ async function runScan() {
     });
   }
 
-  // Keep last 100 log entries
   await storage.setItem("alertLog", alertLog.slice(0, 100));
   settings.totalAlertsSet = (settings.totalAlertsSet || 0) + 1;
   await storage.setItem("settings", settings);
@@ -368,7 +366,6 @@ async function runScan() {
 
 // ── API routes ────────────────────────────────────────────────────────────────
 
-// Dashboard data
 app.get("/api/status", async (req, res) => {
   const settings = await storage.getItem("settings");
   const recipients = await storage.getItem("recipients");
@@ -382,13 +379,11 @@ app.get("/api/status", async (req, res) => {
   });
 });
 
-// Manually trigger scan
 app.post("/api/scan", async (req, res) => {
   res.json({ message: "Scan triggered" });
   runScan();
 });
 
-// Recipients CRUD
 app.get("/api/recipients", async (req, res) => {
   res.json(await storage.getItem("recipients") || []);
 });
@@ -426,7 +421,6 @@ app.delete("/api/recipients/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
-// Settings
 app.patch("/api/settings", async (req, res) => {
   const settings = (await storage.getItem("settings")) || {};
   const updated = { ...settings, ...req.body };
@@ -434,18 +428,15 @@ app.patch("/api/settings", async (req, res) => {
   res.json(updated);
 });
 
-// Alert log
 app.get("/api/alerts", async (req, res) => {
   res.json((await storage.getItem("alertLog")) || []);
 });
 
-// Clear seen jobs (reset — will re-alert on next scan)
 app.post("/api/reset-seen", async (req, res) => {
   await storage.setItem("seenJobs", {});
   res.json({ ok: true });
 });
 
-// Test email
 app.post("/api/test-email", async (req, res) => {
   const { recipientId } = req.body;
   const recipients = (await storage.getItem("recipients")) || [];
@@ -466,7 +457,7 @@ app.post("/api/test-email", async (req, res) => {
   res.json({ sent });
 });
 
-// Serve dashboard for all other routes
+// Serve dashboard
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "../public/index.html"));
 });
@@ -481,7 +472,6 @@ async function ensureInit() {
   }
 }
 
-// For local development: start the server normally
 if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   ensureInit().then(() => {
     const PORT = process.env.PORT || 3000;
@@ -491,7 +481,6 @@ if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   }).catch(console.error);
 }
 
-// For Vercel: wrap app to ensure storage is initialized on every cold start
 const handler = async (req, res) => {
   await ensureInit();
   return app(req, res);
