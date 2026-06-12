@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HealthJobs Alert Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0c1220;
+      --surface:   #131d2e;
+      --surface2:  #1a2640;
+      --border:    #1f3050;
+      --accent:    #38bdf8;
+      --accent2:   #818cf8;
+      --green:     #34d399;
+      --amber:     #fbbf24;
+      --red:       #f87171;
+      --text:      #e2e8f0;
+      --muted:     #64748b;
+      --pulse:     rgba(56,189,248,0.15);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo-icon {
+      width: 34px; height: 34px;
+      background: linear-gradient(135deg, #0369a1, #38bdf8);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .logo-text { font-size: 15px; font-weight: 600; color: var(--text); }
+    .logo-sub  { font-size: 11px; color: var(--muted); }
+
+    .status-badge {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; color: var(--muted);
+    }
+    .pulse-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(52,211,153,0.4);
+      animation: pulse 2s infinite;
+    }
+    .pulse-dot.paused { background: var(--amber); animation: none; }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.4); }
+      70%  { box-shadow: 0 0 0 8px rgba(52,211,153,0); }
+      100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+    }
+
+    /* ── Layout ── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+
+    .grid-top {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .grid-main {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 24px;
+    }
+
+    /* ── Stat cards ── */
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+    }
+    .stat-card.blue::before  { background: linear-gradient(90deg, #0369a1, #38bdf8); }
+    .stat-card.green::before { background: linear-gradient(90deg, #059669, #34d399); }
+    .stat-card.amber::before { background: linear-gradient(90deg, #d97706, #fbbf24); }
+    .stat-card.violet::before{ background: linear-gradient(90deg, #7c3aed, #818cf8); }
+
+    .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .stat-value { font-size: 32px; font-weight: 700; margin-top: 6px; font-family: 'JetBrains Mono', monospace; }
+    .stat-value.blue   { color: var(--accent); }
+    .stat-value.green  { color: var(--green); }
+    .stat-value.amber  { color: var(--amber); }
+    .stat-value.violet { color: var(--accent2); }
+    .stat-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .card-title { font-size: 14px; font-weight: 600; }
+    .card-body  { padding: 22px; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px; font-weight: 500;
+      cursor: pointer; border: none;
+      transition: all 0.15s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #0c1220;
+    }
+    .btn-primary:hover { background: #7dd3fc; }
+    .btn-ghost {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { background: var(--border); }
+    .btn-danger {
+      background: rgba(248,113,113,0.15);
+      color: var(--red);
+      border: 1px solid rgba(248,113,113,0.3);
+    }
+    .btn-danger:hover { background: rgba(248,113,113,0.25); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Toggle ── */
+    .toggle-wrap { display: flex; align-items: center; gap: 10px; }
+    .toggle {
+      position: relative; width: 44px; height: 24px;
+      cursor: pointer;
+    }
+    .toggle input { display: none; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 12px;
+      transition: background 0.2s;
+    }
+    .toggle input:checked + .toggle-track { background: var(--green); }
+    .toggle-thumb {
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 18px; height: 18px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .toggle input:checked ~ .toggle-thumb { transform: translateX(20px); }
+
+    /* ── Alert feed ── */
+    .alert-item {
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .alert-item:last-child { border-bottom: none; }
+    .alert-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .alert-time { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+    .tag {
+      font-size: 10px; font-weight: 600; padding: 2px 7px;
+      border-radius: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .tag-sent   { background: rgba(52,211,153,0.15); color: var(--green); }
+    .tag-failed { background: rgba(248,113,113,0.15); color: var(--red); }
+    .tag-email  { background: rgba(56,189,248,0.15);  color: var(--accent); }
+    .tag-tg     { background: rgba(129,140,248,0.15); color: var(--accent2); }
+    .alert-jobs { font-size: 13px; color: var(--text); }
+    .alert-job-name { color: var(--accent); }
+
+    /* ── Recipients ── */
+    .recipient-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .recipient-item:last-child { border-bottom: none; }
+    .recipient-avatar {
+      width: 36px; height: 36px;
+      background: var(--surface2);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; flex-shrink: 0;
+    }
+    .recipient-info { flex: 1; min-width: 0; }
+    .recipient-email { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .recipient-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .recipient-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+    /* ── Add recipient form ── */
+    .add-form { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+    .form-row { display: flex; gap: 8px; margin-bottom: 10px; }
+    .input-field {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 13px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .input-field:focus { border-color: var(--accent); }
+    .input-field::placeholder { color: var(--muted); }
+    .select-field {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 13px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      cursor: pointer;
+    }
+    .select-field:focus { border-color: var(--accent); }
+
+    /* ── Last scan info ── */
+    .scan-info {
+      font-size: 12px; color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Empty states ── */
+    .empty {
+      padding: 32px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 24px; right: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 18px;
+      font-size: 13px;
+      transform: translateY(80px);
+      opacity: 0;
+      transition: all 0.3s;
+      z-index: 999;
+      max-width: 320px;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+    #toast.success { border-color: var(--green); color: var(--green); }
+    #toast.error   { border-color: var(--red);   color: var(--red); }
+
+    /* ── Config note ── */
+    .config-note {
+      background: rgba(251,191,36,0.08);
+      border: 1px solid rgba(251,191,36,0.25);
+      border-radius: 10px;
+      padding: 14px 18px;
+      font-size: 13px;
+      color: #fde68a;
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+    .config-note strong { color: var(--amber); }
+    .config-note code {
+      background: rgba(251,191,36,0.15);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .grid-top  { grid-template-columns: repeat(2, 1fr); }
+      .grid-main { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 600px) {
+      .grid-top { grid-template-columns: 1fr 1fr; }
+      header { padding: 0 16px; }
+      .container { padding: 20px 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🏥</div>
+    <div>
+      <div class="logo-text">HealthJobs Alert</div>
+      <div class="logo-sub">Medical & Dental · UK</div>
+    </div>
+  </div>
+  <div class="status-badge">
+    <div class="pulse-dot" id="statusDot"></div>
+    <span id="statusText">Loading…</span>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Config notice (shown if no env vars) -->
+  <div class="config-note" id="configNote" style="display:none">
+    ⚙️ <strong>Email not configured yet.</strong> Set these environment variables in your Vercel dashboard:<br>
+    <code>GMAIL_USER</code> = your Gmail address &nbsp;|&nbsp;
+    <code>GMAIL_APP_PASSWORD</code> = your Gmail App Password
+    <br><small style="color:#a78bfa">For Telegram: also set <code>TELEGRAM_BOT_TOKEN</code>. Job scanning runs regardless.</small>
+  </div>
+
+  <!-- Stats row -->
+  <div class="grid-top">
+    <div class="stat-card blue">
+      <div class="stat-label">Jobs Detected</div>
+      <div class="stat-value blue" id="statJobs">—</div>
+      <div class="stat-sub">since deployment</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Alert Batches Sent</div>
+      <div class="stat-value green" id="statAlerts">—</div>
+      <div class="stat-sub">unique job batches</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-label">Recipients</div>
+      <div class="stat-value amber" id="statRecipients">—</div>
+      <div class="stat-sub">active channels</div>
+    </div>
+    <div class="stat-card violet">
+      <div class="stat-label">Seen Jobs DB</div>
+      <div class="stat-value violet" id="statSeen">—</div>
+      <div class="stat-sub">no duplicate alerts</div>
+    </div>
+  </div>
+
+  <!-- Main grid -->
+  <div class="grid-main">
+
+    <!-- Left: Alert log + Controls -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
+
+      <!-- Controls -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Scanner Controls</span>
+          <div class="scan-info" id="lastScanText">Never scanned</div>
+        </div>
+        <div class="card-body" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <div class="toggle-wrap">
+            <label class="toggle">
+              <input type="checkbox" id="alertsToggle" onchange="toggleAlerts(this.checked)" />
+              <div class="toggle-track"></div>
+              <div class="toggle-thumb"></div>
+            </label>
+            <span style="font-size:13px;">Alerts enabled</span>
+          </div>
+          <button class="btn btn-primary" onclick="triggerScan()" id="scanBtn">
+            ⚡ Scan Now
+          </button>
+          <button class="btn btn-ghost" onclick="resetSeen()" id="resetBtn">
+            🔄 Reset Seen Jobs
+          </button>
+          <span style="font-size:12px;color:var(--muted);margin-left:auto;">Scans every <strong style="color:var(--text)">60s</strong></span>
+        </div>
+      </div>
+
+      <!-- Recent alerts -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Recent Alerts</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadStatus()">↻ Refresh</button>
+        </div>
+        <div class="card-body" id="alertFeed">
+          <div class="empty">Loading alerts…</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right: Recipients -->
+    <div class="card" style="height: fit-content;">
+      <div class="card-header">
+        <span class="card-title">Alert Recipients</span>
+      </div>
+      <div class="card-body">
+        <div id="recipientsList"></div>
+
+        <div class="add-form">
+          <div style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;">Add Recipient</div>
+          <div class="form-row">
+            <select class="select-field" id="newType" onchange="updateFormPlaceholder()">
+              <option value="email">Email</option>
+              <option value="telegram">Telegram</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <input class="input-field" id="newEmail" placeholder="email@example.com" type="email" />
+          </div>
+          <div id="telegramField" style="display:none" class="form-row">
+            <input class="input-field" id="newChatId" placeholder="Telegram Chat ID" />
+          </div>
+          <button class="btn btn-primary" onclick="addRecipient()" style="width:100%;justify-content:center;">
+            + Add Recipient
+          </button>
+
+          <div style="margin-top:16px;padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--muted);line-height:1.7;">
+            <strong style="color:var(--text);">Telegram setup:</strong><br>
+            1. Message <code style="color:var(--accent);">@userinfobot</code> on Telegram<br>
+            2. It replies with your Chat ID<br>
+            3. Set <code style="color:var(--accent);">TELEGRAM_BOT_TOKEN</code> env var<br>
+            <a href="https://t.me/BotFather" target="_blank" style="color:var(--accent2);">Create bot via @BotFather →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let currentStatus = null;
+
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `show ${type}`;
+  setTimeout(() => { t.className = ''; }, 3000);
+}
+
+function timeAgo(iso) {
+  if (!iso) return 'never';
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return new Date(iso).toLocaleDateString('en-GB');
+}
+
+function formatTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+
+async function loadStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    currentStatus = data;
+    renderStatus(data);
+  } catch (e) {
+    document.getElementById('statusText').textContent = 'Error loading status';
+  }
+}
+
+function renderStatus(data) {
+  const { settings, recipients, seenJobsCount, recentAlerts } = data;
+
+  // Header status
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  if (settings.alertsEnabled) {
+    dot.className = 'pulse-dot';
+    txt.textContent = 'Scanning active';
+  } else {
+    dot.className = 'pulse-dot paused';
+    txt.textContent = 'Alerts paused';
+  }
+
+  // Stats
+  document.getElementById('statJobs').textContent = settings.totalJobsFound || 0;
+  document.getElementById('statAlerts').textContent = settings.totalAlertsSet || 0;
+  document.getElementById('statRecipients').textContent = (recipients || []).filter(r => r.active).length;
+  document.getElementById('statSeen').textContent = seenJobsCount || 0;
+
+  // Last scan
+  document.getElementById('lastScanText').textContent = settings.lastScan
+    ? `Last scan: ${timeAgo(settings.lastScan)}`
+    : 'Not yet scanned';
+
+  // Toggle
+  document.getElementById('alertsToggle').checked = !!settings.alertsEnabled;
+
+  // Config note
+  const needsConfig = !settings.emailConfigured;
+  // Show note based on whether emails are configured — we can't detect this perfectly client-side
+  // so just always show a subtle reminder
+  document.getElementById('configNote').style.display = 'none'; // hidden by default; user knows
+
+  // Recipients
+  renderRecipients(recipients || []);
+
+  // Alert feed
+  renderAlerts(recentAlerts || []);
+}
+
+function renderRecipients(recipients) {
+  const el = document.getElementById('recipientsList');
+  if (!recipients.length) {
+    el.innerHTML = '<div class="empty">No recipients yet</div>';
+    return;
+  }
+  el.innerHTML = recipients.map(r => `
+    <div class="recipient-item">
+      <div class="recipient-avatar">${r.type === 'telegram' ? '📱' : '📧'}</div>
+      <div class="recipient-info">
+        <div class="recipient-email">${r.email || r.telegramChatId}</div>
+        <div class="recipient-sub">
+          <span class="tag ${r.type === 'telegram' ? 'tag-tg' : 'tag-email'}">${r.type}</span>
+          &nbsp;Added ${timeAgo(r.addedAt || '')}
+        </div>
+      </div>
+      <div class="recipient-actions">
+        <button class="btn btn-ghost btn-sm" onclick="testRecipient('${r.id}')" title="Send test email">✉️</button>
+        <button class="btn ${r.active ? 'btn-ghost' : 'btn-danger'} btn-sm"
+          onclick="toggleRecipient('${r.id}', ${!r.active})">
+          ${r.active ? 'Pause' : 'Resume'}
+        </button>
+        <button class="btn btn-danger btn-sm" onclick="deleteRecipient('${r.id}')">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderAlerts(alerts) {
+  const el = document.getElementById('alertFeed');
+  if (!alerts.length) {
+    el.innerHTML = '<div class="empty">No alerts sent yet — scan results will appear here</div>';
+    return;
+  }
+  el.innerHTML = alerts.map(a => `
+    <div class="alert-item">
+      <div class="alert-meta">
+        <span class="alert-time">${formatTime(a.timestamp)}</span>
+        <span class="tag ${a.sent ? 'tag-sent' : 'tag-failed'}">${a.sent ? 'Sent' : 'Failed'}</span>
+        <span class="tag ${a.type === 'telegram' ? 'tag-tg' : 'tag-email'}">${a.type}</span>
+        <span style="font-size:11px;color:var(--muted);margin-left:auto;">${a.recipient}</span>
+      </div>
+      <div class="alert-jobs">
+        ${a.jobCount} job${a.jobCount > 1 ? 's' : ''}:
+        ${(a.jobs || []).slice(0, 3).map(j =>
+          `<a href="${j.url}" target="_blank" class="alert-job-name" style="text-decoration:none;">${j.title}</a>`
+        ).join(', ')}
+        ${(a.jobs || []).length > 3 ? `<span style="color:var(--muted)">+${a.jobs.length - 3} more</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function triggerScan() {
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Scanning…';
+  try {
+    await fetch('/api/scan', { method: 'POST' });
+    showToast('Scan triggered! Refresh in a few seconds.');
+    setTimeout(loadStatus, 4000);
+  } catch (e) {
+    showToast('Failed to trigger scan', 'error');
+  }
+  setTimeout(() => { btn.disabled = false; btn.textContent = '⚡ Scan Now'; }, 4000);
+}
+
+async function toggleAlerts(enabled) {
+  await fetch('/api/settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alertsEnabled: enabled })
+  });
+  showToast(enabled ? 'Alerts enabled ✓' : 'Alerts paused');
+  loadStatus();
+}
+
+async function resetSeen() {
+  if (!confirm('This will clear the seen-jobs database. New scans will re-alert on ALL currently listed jobs. Continue?')) return;
+  await fetch('/api/reset-seen', { method: 'POST' });
+  showToast('Seen jobs reset. Next scan starts fresh.');
+  loadStatus();
+}
+
+async function addRecipient() {
+  const type = document.getElementById('newType').value;
+  const email = document.getElementById('newEmail').value.trim();
+  const chatId = document.getElementById('newChatId').value.trim();
+
+  if (type === 'email' && !email) { showToast('Enter an email address', 'error'); return; }
+  if (type === 'telegram' && !chatId) { showToast('Enter a Telegram Chat ID', 'error'); return; }
+
+  try {
+    const res = await fetch('/api/recipients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, type, telegramChatId: chatId })
+    });
+    if (!res.ok) throw new Error();
+    document.getElementById('newEmail').value = '';
+    document.getElementById('newChatId').value = '';
+    showToast('Recipient added ✓');
+    loadStatus();
+  } catch (e) {
+    showToast('Failed to add recipient', 'error');
+  }
+}
+
+async function deleteRecipient(id) {
+  if (!confirm('Remove this recipient?')) return;
+  await fetch(`/api/recipients/${id}`, { method: 'DELETE' });
+  showToast('Recipient removed');
+  loadStatus();
+}
+
+async function toggleRecipient(id, active) {
+  await fetch(`/api/recipients/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active })
+  });
+  showToast(active ? 'Recipient resumed ✓' : 'Recipient paused');
+  loadStatus();
+}
+
+async function testRecipient(id) {
+  const btn = event.target;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/test-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipientId: id })
+    });
+    const data = await res.json();
+    showToast(data.sent ? 'Test email sent! Check inbox ✓' : 'Send failed — check Gmail credentials', data.sent ? 'success' : 'error');
+  } catch (e) {
+    showToast('Request failed', 'error');
+  }
+  btn.disabled = false;
+}
+
+function updateFormPlaceholder() {
+  const type = document.getElementById('newType').value;
+  const emailField = document.getElementById('newEmail').parentElement;
+  const tgField = document.getElementById('telegramField');
+  if (type === 'telegram') {
+    emailField.style.display = 'none';
+    tgField.style.display = 'flex';
+  } else {
+    emailField.style.display = 'flex';
+    tgField.style.display = 'none';
+  }
+}
+
+// Auto-refresh every 30 seconds
+loadStatus();
+setInterval(loadStatus, 30000);
+</script>
+</body>
+</html>
