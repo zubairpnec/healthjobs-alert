@@ -154,66 +154,98 @@ function passesSalaryFilter(text, salaryMin, salaryMax) {
 
 // ── Scraper ───────────────────────────────────────────────────────────────────
 // Correctly scoped to the Medical and Dental sector only (s2)
-const SEARCH_URL = "https://www.healthjobsuk.com/job_list/s2";
+const TARGET_URL = "https://www.healthjobsuk.com/job_list/s2";
+
+// HealthJobsUK blocks direct requests from cloud/serverless IP ranges (Vercel
+// included) with an HTTP 403. Fetching it directly from a Vercel function does
+// not work no matter what headers are sent — this was confirmed in production.
+// Workaround: route the fetch through Jina AI's free Reader proxy (r.jina.ai),
+// which fetches the page from its own infrastructure and returns clean,
+// pre-rendered Markdown instead of raw HTML. This sidesteps the IP block
+// entirely and also means we don't need cheerio/CSS selectors at all — we
+// parse the consistent Markdown link syntax instead, which has proven stable
+// across every manual fetch of this page so far.
+const READER_URL = `https://r.jina.ai/${TARGET_URL}`;
 
 async function scrapeJobs() {
   try {
-    const { data } = await axios.get(SEARCH_URL, {
+    const { data } = await axios.get(READER_URL, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-GB,en;q=0.5",
-        "Cache-Control": "no-cache"
+        "Accept": "text/plain, text/markdown, */*",
+        "X-No-Cache": "true"
       },
-      timeout: 20000
+      timeout: 30000
     });
 
-    const $ = cheerio.load(data);
+    const text = typeof data === "string" ? data : JSON.stringify(data);
+    const rawHtmlLength = text.length;
+
+    // Markdown link format consistently seen for real job listings:
+    //   1. [Job Title NHS Medical & Dental: GradeEmployer , LocationSpeciality: XSalary: £Y](https://www.healthjobsuk.com/job/.../Slug-v1234567 "Job Title")
+    // We match every markdown link pointing at a /job/ URL with a -v<digits> suffix.
+    const linkPattern = /\[([^\]]+)\]\((https:\/\/www\.healthjobsuk\.com\/job\/[^\s)]*-v(\d+))(?:\s+"[^"]*")?\)/g;
+    const matches = [...text.matchAll(linkPattern)];
+    const totalJobLinksFound = matches.length;
     const jobs = [];
-    const rawHtmlLength = data.length;
-    const totalJobLinksFound = $("a[href*='/job/']").length;
 
-    // Real job URLs on this site always match /job/.../<Slug>-v<digits>
-    // e.g. https://www.healthjobsuk.com/job/UK/Oxfordshire/Oxford/.../Trauma-v7967801
-    $("a[href*='/job/']").each((i, el) => {
-      const $a = $(el);
-      const href = $a.attr("href") || "";
-      const jobIdMatch = href.match(/-v(\d+)(?:["'?]|$)/) || href.match(/\/job\/.*?(\d{6,})/);
-      if (!jobIdMatch) return; // not a real job listing link (could be nav/footer link)
+    for (const m of matches) {
+      const linkText = m[1].trim();   // the full concatenated text inside [ ]
+      const url = m[2].trim();
+      const jobId = m[3];
 
-      const jobId = jobIdMatch[1];
-      // Title is usually the link's title attribute (cleanest) or its text content
-      let title = ($a.attr("title") || $a.text() || "").trim();
-      // Strip leading "More information about " noise sometimes present in title attrs
-      title = title.replace(/^More information about\s*/i, "").trim();
-      if (!title || title.length < 4) return;
+      if (!linkText || linkText.length < 4) continue;
 
-      // Try to find grade/employer/location/speciality from the surrounding list item or row
-      const $container = $a.closest("li, tr, article, .job-result, div").first();
-      const containerText = $container.text().replace(/\s+/g, " ").trim();
+      // The link text itself contains: Title + Grade + Employer + Location +
+      // Speciality + Salary all concatenated with no separators, exactly like
+      // the container text we previously extracted via cheerio. Same parsing
+      // approach applies directly.
+      const grade = linkText;
 
-      // "grade" holds the FULL container text — used internally for keyword/salary
-      // matching, since we can't reliably isolate individual fields by CSS class.
-      const grade = containerText;
+      // The job title is everything before the grade/employer block starts.
+      // Real grade markers that reliably start right after the title:
+      //   "NHS Medical & Dental:", a bare grade word, or an employer name
+      // We can't perfectly isolate just the title from concatenated text, so
+      // for filtering purposes we use the whole linkText (matches old logic).
+      // For DISPLAY purposes we try to cut at the first capital-letter run
+      // that looks like "NHS Medical & Dental:" or before "Speciality:".
+      // Title extraction is best-effort cosmetic display only — it never affects
+      // filtering, since grade/salary matching always runs against the full
+      // linkText. Priority 1: explicit "NHS Medical & Dental:" marker (most
+      // common, most reliable). Priority 2: a bare grade word/phrase that
+      // appears twice in a row right after the title (e.g. "...Specialty Doctor
+      // Specialty Doctor Trust Name"). Priority 3: fallback to truncation.
+      let title = linkText;
+      const ndMatch = linkText.match(/^(.*?)NHS Medical & Dental:/);
+      if (ndMatch && ndMatch[1].length > 4) {
+        title = ndMatch[1].trim();
+      } else {
+        const commaIdx = linkText.search(/\s*,\s*[A-Za-z]/);
+        const beforeComma = commaIdx > -1 ? linkText.substring(0, commaIdx) : linkText;
+        const BARE_GRADES = ["Specialty Doctor", "Consultant", "Locum Consultant", "Specialist Grade", "Registrar"];
+        let found = false;
+        for (const g of BARE_GRADES) {
+          const firstIdx = beforeComma.indexOf(g);
+          const secondIdx = firstIdx > -1 ? beforeComma.indexOf(g, firstIdx + g.length) : -1;
+          if (firstIdx > 3 && secondIdx > -1) {
+            title = linkText.substring(0, firstIdx).trim();
+            found = true;
+            break;
+          }
+        }
+        if (!found) title = linkText.substring(0, 100).trim();
+      }
+      if (!title || title.length < 4) continue;
 
-      // Build a short, clean snippet for email display: try to isolate the
-      // "Speciality: X" and "Salary: £Y" portions, which are consistently labelled
-      // in the real page text and safe to extract via regex.
-      const specialityMatch = containerText.match(/Speciality:\s*([^£]+?)(?=Salary:|$)/i);
-      const salaryMatch = containerText.match(/Salary:\s*([^]*?)$/i);
+      const specialityMatch = linkText.match(/Speciality:\s*([^£]+?)(?=Salary:|$)/i);
+      const salaryMatch = linkText.match(/Salary:\s*([^]*?)$/i);
       const displaySnippet = [
         specialityMatch ? `Speciality: ${specialityMatch[1].trim()}` : null,
         salaryMatch ? `Salary: ${salaryMatch[1].trim().substring(0, 80)}` : null
       ].filter(Boolean).join(" · ");
 
-      // Try to extract employer + location from the pattern consistently seen on
-      // the real site: "<Employer Name> , <Location>Speciality: ...". The employer
-      // name is frequently duplicated in the raw text (logo alt-text + visible text),
-      // so we dedupe a repeated employer name if present.
-      const employerLocMatch = containerText.match(/([A-Z][A-Za-z&,.'’\- ]{4,60}?)\s*,\s*([A-Za-z&,.'’\- ]{2,40}?)Speciality:/);
+      const employerLocMatch = linkText.match(/([A-Z][A-Za-z&,.'’\- ]{4,60}?)\s*,\s*([A-Za-z&,.'’\- ]{2,40}?)Speciality:/);
       let employer = employerLocMatch ? employerLocMatch[1].trim() : "";
       const location = employerLocMatch ? employerLocMatch[2].trim() : "";
-      // If the employer name appears twice back-to-back (e.g. "X Trust X Trust"), keep one copy
       const halfLen = Math.floor(employer.length / 2);
       if (halfLen > 5 && employer.substring(0, halfLen).trim() === employer.substring(halfLen).trim()) {
         employer = employer.substring(0, halfLen).trim();
@@ -227,9 +259,9 @@ async function scrapeJobs() {
         grade,
         displaySnippet,
         closing: "",
-        url: href.startsWith("http") ? href.split("?")[0] : `https://www.healthjobsuk.com${href}`.split("?")[0]
+        url: url.split("?")[0]
       });
-    });
+    }
 
     // De-duplicate by job ID (same job can appear via multiple link wrappers)
     const seen = new Set();
@@ -241,8 +273,12 @@ async function scrapeJobs() {
 
     return { jobs: deduped, rawHtmlLength, totalJobLinksFound };
   } catch (err) {
-    console.error("[Scraper] Error:", err.message);
-    return { jobs: [], error: err.message };
+    const status = err.response?.status;
+    const message = status
+      ? `HTTP ${status} ${err.response?.statusText || ""} from Jina Reader proxy — target site or proxy may be temporarily unavailable`
+      : err.message;
+    console.error("[Scraper] Error:", message);
+    return { jobs: [], error: message, httpStatus: status };
   }
 }
 
