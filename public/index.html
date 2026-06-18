@@ -349,6 +349,10 @@
             <button class="a-btn a-btn-ghost" onclick="resetSeen()">🔄 Reset Seen</button>
             <button class="a-btn a-btn-ghost" onclick="testEmail()">✉️ Test Email</button>
           </div>
+          <div class="a-card-body" id="diagPanel" style="border-top:1px solid var(--d-line);padding-top:14px;">
+            <div style="font-size:11px;color:var(--d-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Last scan diagnostics</div>
+            <div id="diagContent" style="font-size:12.5px;font-family:'JetBrains Mono',monospace;color:var(--d-text);line-height:1.8;">No scan run yet.</div>
+          </div>
         </div>
 
         <div class="a-card">
@@ -491,6 +495,7 @@ async function loadAdmin() {
     document.getElementById("sSeen").textContent = d.seenJobsCount || 0;
     document.getElementById("subCount").textContent = `${(d.recipients||[]).length} total`;
     document.getElementById("lastScanTxt").textContent = d.settings?.lastScan ? `Last scan: ${timeAgo(d.settings.lastScan)}` : "Not yet scanned";
+    renderDiagnostics(d.settings);
     document.getElementById("alertToggle").checked = !!d.settings?.alertsEnabled;
     const dot = document.getElementById("statusDot");
     const txt = document.getElementById("statusTxt");
@@ -518,6 +523,25 @@ async function saveSalary() {
   if (salaryMin >= salaryMax) { toast("Minimum must be less than maximum", "err"); return; }
   await fetch("/api/admin/settings", { method:"PATCH", headers:{"Content-Type":"application/json","x-admin-password":adminPw}, body: JSON.stringify({salaryFilterEnabled, salaryMin, salaryMax}) });
   toast(`Saved — £${salaryMin.toLocaleString()} to £${salaryMax.toLocaleString()}`);
+}
+
+function renderDiagnostics(settings) {
+  const el = document.getElementById("diagContent");
+  if (settings?.lastError) {
+    el.innerHTML = `<span style="color:var(--d-red)">Scrape error: ${settings.lastError}</span>`;
+    return;
+  }
+  const d = settings?.lastDiagnostics;
+  if (!d) { el.textContent = "No scan run yet."; return; }
+  el.innerHTML = `
+    Raw HTML received: <span style="color:var(--d-accent)">${d.rawHtmlLength?.toLocaleString() || 0} chars</span><br>
+    Job links found in HTML: <span style="color:var(--d-accent)">${d.totalJobLinksFound ?? "?"}</span><br>
+    Raw jobs parsed: <span style="color:var(--d-accent)">${d.rawJobsFound}</span><br>
+    After grade filter: <span style="color:var(--d-accent)">${d.afterGradeFilter}</span><br>
+    After salary filter: <span style="color:var(--d-accent)">${d.afterSalaryFilter}</span><br>
+    New (not seen before): <span style="color:var(--d-accent)">${d.newAfterDedup}</span><br>
+    ${d.sampleTitles?.length ? `<br>Sample titles scraped:<br>${d.sampleTitles.map(t => `&nbsp;&nbsp;• ${t}`).join("<br>")}` : "<br><span style='color:var(--d-amber)'>⚠ No job titles found at all — scraper found 0 raw jobs on the page.</span>"}
+  `;
 }
 
 function renderGrades() {
