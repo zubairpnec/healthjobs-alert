@@ -170,6 +170,8 @@ async function scrapeJobs() {
 
     const $ = cheerio.load(data);
     const jobs = [];
+    const rawHtmlLength = data.length;
+    const totalJobLinksFound = $("a[href*='/job/']").length;
 
     // Real job URLs on this site always match /job/.../<Slug>-v<digits>
     // e.g. https://www.healthjobsuk.com/job/UK/Oxfordshire/Oxford/.../Trauma-v7967801
@@ -237,7 +239,7 @@ async function scrapeJobs() {
       return true;
     });
 
-    return { jobs: deduped };
+    return { jobs: deduped, rawHtmlLength, totalJobLinksFound };
   } catch (err) {
     console.error("[Scraper] Error:", err.message);
     return { jobs: [], error: err.message };
@@ -321,10 +323,22 @@ async function runScan() {
   console.log(`[Scan] ${new Date().toISOString()}`);
   const settings = (await dbGet("settings")) || {};
   settings.lastScan = new Date().toISOString();
-  await dbSet("settings", settings);
 
-  const { jobs, error } = await scrapeJobs();
-  if (error) { settings.lastError = error; await dbSet("settings", settings); return; }
+  const diag = { rawJobsFound: 0, afterGradeFilter: 0, afterSalaryFilter: 0, newAfterDedup: 0, sampleTitles: [], error: null, rawHtmlLength: 0, totalJobLinksFound: 0 };
+
+  const { jobs, error, rawHtmlLength, totalJobLinksFound } = await scrapeJobs();
+  diag.rawJobsFound = jobs.length;
+  diag.sampleTitles = jobs.slice(0, 5).map(j => j.title);
+  diag.rawHtmlLength = rawHtmlLength || 0;
+  diag.totalJobLinksFound = totalJobLinksFound || 0;
+
+  if (error) {
+    diag.error = error;
+    settings.lastError = error;
+    settings.lastDiagnostics = diag;
+    await dbSet("settings", settings);
+    return;
+  }
 
   const selectedGrades = settings.selectedGrades || DEFAULT_SELECTED_GRADES;
   const salaryMin = settings.salaryMin ?? DEFAULT_SALARY_MIN;
@@ -332,14 +346,22 @@ async function runScan() {
   const salaryFilterEnabled = settings.salaryFilterEnabled !== false;
 
   const gradeFiltered = jobs.filter(j => shouldIncludeJob(j.title, j.grade, selectedGrades));
+  diag.afterGradeFilter = gradeFiltered.length;
+
   const filtered = salaryFilterEnabled
     ? gradeFiltered.filter(j => passesSalaryFilter(j.grade, salaryMin, salaryMax))
     : gradeFiltered;
+  diag.afterSalaryFilter = filtered.length;
 
   const seenJobs = (await dbGet("seenJobs")) || {};
   const newJobs = filtered.filter(j => !seenJobs[j.id]);
+  diag.newAfterDedup = newJobs.length;
 
-  if (!newJobs.length) { console.log("[Scan] No new jobs"); return; }
+  settings.lastError = null;
+  settings.lastDiagnostics = diag;
+  await dbSet("settings", settings);
+
+  if (!newJobs.length) { console.log("[Scan] No new jobs", diag); return; }
 
   newJobs.forEach(j => { seenJobs[j.id] = { seenAt: new Date().toISOString(), title: j.title }; });
   await dbSet("seenJobs", seenJobs);
