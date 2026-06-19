@@ -1,6 +1,5 @@
 const express = require("express");
 const axios = require("axios");
-const cheerio = require("cheerio");
 const nodemailer = require("nodemailer");
 const cors = require("cors");
 const path = require("path");
@@ -12,7 +11,7 @@ app.use(express.static(path.join(__dirname, "../public")));
 
 // ── Upstash Redis ─────────────────────────────────────────────────────────────
 const mem = {};
-function kvMemory(method, key, value) {
+function kvMem(method, key, value) {
   if (method === "get") return mem[key] ?? null;
   if (method === "set") { mem[key] = value; return "OK"; }
   if (method === "del") { delete mem[key]; return 1; }
@@ -21,7 +20,7 @@ function kvMemory(method, key, value) {
 async function kv(method, ...args) {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return kvMemory(method, ...args);
+  if (!url || !token) return kvMem(method, ...args);
   const res = await axios.post(
     `${url}/${[method, ...args.map(a => typeof a === "object" ? JSON.stringify(a) : a)].join("/")}`,
     null, { headers: { Authorization: `Bearer ${token}` }, timeout: 8000 }
@@ -35,63 +34,57 @@ async function dbSet(key, value) {
   try { await kv("set", key, JSON.stringify(value)); } catch(e) { console.error("dbSet:", e.message); }
 }
 
-// ── Grade definitions (selectable in admin panel) ────────────────────────────
-// Keywords below are derived from REAL listings on healthjobsuk.com/job_list/s2
-// Real grade field examples seen on site:
-//   "NHS Medical & Dental: Senior House Officer"
-//   "NHS Medical & Dental: Junior Clinical Fellow (ST1 - 2)"
-//   "NHS Medical & Dental: Specialty Doctor"
-//   "Trust Grade ST1/2"
-//   "NHS Medical & Dental: Local Appointment nodal point 3/4 (MT03/MT04)"  <- junior-ish fellow tier
-//   "Junior Clinical Fellow" (also appears as job-title prefix)
-//   Senior/exclude tier: "Consultant", "Locum Consultant", "Senior Clinical Fellow",
-//   "Registrar ST4-6", "Specialist Grade", "Chief Registrar", nodal point 5+ (MT05+)
+// ── Grade options (admin-selectable) ─────────────────────────────────────────
 const GRADE_OPTIONS = {
-  fy1:           { label: "FY1 (Foundation Year 1)",       keywords: ["fy1", "foundation year 1", "f1 doctor", "foundation doctor year 1"] },
-  fy2:           { label: "FY2 (Foundation Year 2)",       keywords: ["fy2", "foundation year 2", "f2 doctor", "foundation doctor year 2"] },
-  foundation:    { label: "Foundation Doctor (general)",   keywords: ["foundation doctor", "foundation programme", "foundation year"] },
-  sho:           { label: "SHO (Senior House Officer)",    keywords: ["senior house officer", " sho ", " sho)", " sho-", "(sho)"] },
-  st1_st2:       { label: "ST1 / ST2 (junior specialty)",  keywords: ["st1/2", "st1-2", "st1 - 2", "st1/st2", "(st1", "st 1/2", "trust grade st1", "ct1", "ct2", "core trainee", "core medical", "core surgical", "core psychiatry"] },
-  junior_clinical_fellow: { label: "Junior Clinical Fellow", keywords: ["junior clinical fellow"] },
-  clinical_fellow_general: { label: "Clinical Fellow (general, non-senior)", keywords: ["clinical fellow"] },
-  trust_grade:   { label: "Trust Grade Doctor",             keywords: ["trust grade", "trust doctor"] },
-  led_doctor:    { label: "LED (Locally Employed Doctor)",  keywords: ["led junior doctor", "locally employed doctor", " led "] },
-  gp_trainee:    { label: "GP Trainee / GPST",              keywords: ["gp trainee", "gpst", "gp st1", "gp st2", "gp st3", "gp registrar trainee"] },
-  house_officer: { label: "House Officer",                  keywords: ["house officer"] },
-  junior_doctor: { label: "Junior Doctor (general)",        keywords: ["junior doctor", "junior fellow"] },
-  nodal_3_4:     { label: "Local Appointment MT03 / MT04 (junior fellow tier)", keywords: ["nodal point 3", "nodal point 4", "(mt03)", "(mt04)", "mt03", "mt04"] },
-  locum_junior:  { label: "Locum (junior grades only)",     keywords: ["locum sho", "locum fy", "locum f1", "locum f2", "locum junior"] },
-  specialty_doctor: { label: "Specialty Doctor",            keywords: ["specialty doctor"] }
+  fy1:               { label: "FY1 (Foundation Year 1)",            keywords: ["fy1", "foundation year 1", "foundation doctor year 1"] },
+  fy2:               { label: "FY2 (Foundation Year 2)",            keywords: ["fy2", "foundation year 2", "foundation doctor year 2"] },
+  foundation:        { label: "Foundation Doctor (general)",        keywords: ["foundation doctor", "foundation programme", "foundation year"] },
+  sho:               { label: "SHO (Senior House Officer)",         keywords: ["senior house officer", "sho"] },
+  ct1_ct2:           { label: "CT1 / CT2 / Core Trainee",           keywords: ["ct1", "ct2", "core trainee", "core medical", "core surgical"] },
+  st1_st2:           { label: "ST1 / ST2 (junior specialty)",       keywords: ["st1/2", "st1-2", "st1 - 2", "(st1", "st1/st2"] },
+  junior_clin_fellow:{ label: "Junior Clinical Fellow",             keywords: ["junior clinical fellow"] },
+  clinical_fellow:   { label: "Clinical Fellow (general)",          keywords: ["clinical fellow"] },
+  trust_grade:       { label: "Trust Grade Doctor",                 keywords: ["trust grade", "trust doctor"] },
+  led_doctor:        { label: "LED / Locally Employed Doctor",      keywords: ["led junior", "locally employed doctor"] },
+  gp_trainee:        { label: "GP Trainee / GPST",                  keywords: ["gp trainee", "gpst", "gp st"] },
+  house_officer:     { label: "House Officer",                      keywords: ["house officer"] },
+  junior_doctor:     { label: "Junior Doctor (general)",            keywords: ["junior doctor", "junior fellow"] },
+  nodal_3_4:         { label: "Local Appointment MT03 / MT04",      keywords: ["nodal point 3", "nodal point 4", "mt03", "mt04", "(mt03)", "(mt04)"] },
+  locum_junior:      { label: "Locum (junior grades)",              keywords: ["locum sho", "locum fy", "locum junior"] },
+  specialty_doctor:  { label: "Specialty Doctor",                   keywords: ["specialty doctor"] }
 };
 
-const DEFAULT_SELECTED_GRADES = ["fy1", "fy2", "foundation", "sho", "st1_st2", "junior_clinical_fellow", "trust_grade", "led_doctor", "gp_trainee", "house_officer", "junior_doctor", "nodal_3_4", "locum_junior", "specialty_doctor"];
+const DEFAULT_GRADES = Object.keys(GRADE_OPTIONS);
+const DEFAULT_SALARY_MIN = 35000;
+const DEFAULT_SALARY_MAX = 80000;
 
-// Senior/high-grade terms that ALWAYS exclude a job, no matter what else matches.
-// This is a hard safety net — real listings show these terms reliably mark senior posts.
+// Senior roles — ALWAYS excluded regardless of grade selection
 const HARD_EXCLUDE = [
   "consultant", "locum consultant", "senior clinical fellow", "specialist grade",
-  "chief registrar", "registrar st3", "registrar st4", "registrar st5", "registrar st6",
-  "registrar st7", "registrar st8", "st3-", "st4-", "st5-", "st6-", "st7-", "st8-",
-  "st3 -", "st4 -", "(st3", "(st4", "(st5", "(st6", "(st7", "(st8",
+  "chief registrar", "(st3", "(st4", "(st5", "(st6", "(st7", "(st8",
+  "st3-", "st4-", "st5-", "st6-", "registrar st3", "registrar st4", "registrar st5",
   "nodal point 5", "nodal point 6", "nodal point 7", "nodal point 8",
-  "(mt05)", "(mt06)", "(mt07)", "(mt08)", "mt05", "mt06", "mt07", "mt08",
-  "training programme director", "tpd "
+  "mt05", "mt06", "mt07", "mt08", "(mt05)", "(mt06)", "(mt07)", "(mt08)",
+  "training programme director"
 ];
 
 async function ensureDefaults() {
-  if (!await dbGet("settings"))   await dbSet("settings",   { alertsEnabled:true, lastScan:null, totalJobsFound:0, totalAlertsSet:0, selectedGrades: DEFAULT_SELECTED_GRADES, salaryMin: DEFAULT_SALARY_MIN, salaryMax: DEFAULT_SALARY_MAX, salaryFilterEnabled: true });
-  else {
+  if (!await dbGet("settings")) await dbSet("settings", {
+    alertsEnabled: true, lastScan: null, totalJobsFound: 0, totalAlertsSet: 0,
+    selectedGrades: DEFAULT_GRADES, salaryMin: DEFAULT_SALARY_MIN,
+    salaryMax: DEFAULT_SALARY_MAX, salaryFilterEnabled: true
+  }); else {
     const s = await dbGet("settings");
     let changed = false;
-    if (!s.selectedGrades) { s.selectedGrades = DEFAULT_SELECTED_GRADES; changed = true; }
+    if (!s.selectedGrades) { s.selectedGrades = DEFAULT_GRADES; changed = true; }
     if (s.salaryMin === undefined) { s.salaryMin = DEFAULT_SALARY_MIN; changed = true; }
     if (s.salaryMax === undefined) { s.salaryMax = DEFAULT_SALARY_MAX; changed = true; }
     if (s.salaryFilterEnabled === undefined) { s.salaryFilterEnabled = true; changed = true; }
     if (changed) await dbSet("settings", s);
   }
   if (!await dbGet("recipients")) await dbSet("recipients", []);
-  if (!await dbGet("seenJobs"))   await dbSet("seenJobs",   {});
-  if (!await dbGet("alertLog"))   await dbSet("alertLog",   []);
+  if (!await dbGet("seenJobs"))   await dbSet("seenJobs", {});
+  if (!await dbGet("alertLog"))   await dbSet("alertLog", []);
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -101,257 +94,157 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// ── Job filter — driven entirely by selectedGrades, no hardcoded excludes ───
-function shouldIncludeJob(title, grade, selectedGrades) {
-  const combined = `${title} ${grade || ""}`.toLowerCase();
-
-  // Hard safety net: these terms always mean a senior post, regardless of grade selection
-  if (HARD_EXCLUDE.some(kw => combined.includes(kw))) return false;
-
+// ── Filters ───────────────────────────────────────────────────────────────────
+function shouldInclude(title, selectedGrades) {
+  const t = title.toLowerCase();
+  if (HARD_EXCLUDE.some(kw => t.includes(kw))) return false;
   for (const key of selectedGrades) {
     const def = GRADE_OPTIONS[key];
-    if (!def) continue;
-    if (def.keywords.some(kw => combined.includes(kw))) return true;
+    if (def && def.keywords.some(kw => t.includes(kw))) return true;
   }
   return false;
 }
 
-// ── Salary filter ─────────────────────────────────────────────────────────────
-// Real NHS pay bands (2026/27, England, basic salary, official NHS Employers /
-// healthcareers.nhs.uk figures):
-//   Foundation (FY1/FY2):        ~£40,190 – £45,994
-//   Specialty training (CT/ST1-8, i.e. SHO/Trust Grade/Jr Clinical Fellow): £54,499 – £76,582
-//   Specialty Doctor:            £63,696 – £102,689
-//   Specialist Grade:            £104,401 – £115,341
-//   Consultant:                  £113,565 – £150,569
-// Junior-grade posts on this site realistically range ~£35,000–£80,000 once you
-// include nodal-point variation, part-time pro-rata, and devolved-nation scales
-// (which run lower than England). Default bounds set wide enough not to exclude
-// genuine junior posts, but tight enough to filter out consultant-tier salaries.
-const DEFAULT_SALARY_MIN = 35000;
-const DEFAULT_SALARY_MAX = 80000;
-
-// Extracts the highest plausible annual salary figure mentioned in a text blob.
-// Real listings show salary as e.g. "£54,499 per annum" or "£63,696 - £102,689 per annum".
-// We take the upper bound of any range so a post isn't wrongly excluded just because
-// its starting salary looks low (specialty doctor posts start in-range but cap high).
-function extractMaxSalary(text) {
-  if (!text) return null;
-  const matches = [...text.matchAll(/£\s?(\d{2,3}(?:,\d{3})|\d{4,6})/g)];
-  if (!matches.length) return null;
-  const values = matches.map(m => parseInt(m[1].replace(/,/g, ""), 10)).filter(n => n >= 10000 && n <= 250000);
-  if (!values.length) return null;
-  return Math.max(...values);
+function passesSalary(salaryLow, salaryHigh, min, max) {
+  // salaryLow/salaryHigh come directly from the API as numbers
+  if (!salaryLow && !salaryHigh) return true; // no salary data — don't filter out
+  const low = parseFloat(salaryLow) || 0;
+  const high = parseFloat(salaryHigh) || low;
+  // Include if the LOW end of the salary range is within bounds
+  // (avoids excluding Specialty Doctor posts that START in-range but cap high)
+  return low >= min && low <= max;
 }
 
-function passesSalaryFilter(text, salaryMin, salaryMax) {
-  const max = extractMaxSalary(text);
-  // If we can't find a salary figure at all, don't block the job on salary grounds —
-  // grade-keyword matching is the primary filter; salary is a secondary safety net.
-  if (max === null) return true;
-  return max >= salaryMin && max <= salaryMax;
+// ── NHS Jobs XML API scraper ──────────────────────────────────────────────────
+// jobs.nhs.uk provides a public XML API — no bot detection, no scraping needed.
+// Endpoint: https://www.jobs.nhs.uk/api/v1/search_xml?keyword=X&page=N
+// Returns structured XML with fields: id, jobTitle, organisationName,
+// salaryMin, salaryMax, closingDate, postedDate, jobUrl, locationName
+// We search multiple junior-grade keywords to cast a wide net, then filter.
+const SEARCH_KEYWORDS = [
+  "junior clinical fellow",
+  "trust grade doctor",
+  "foundation doctor",
+  "SHO senior house officer",
+  "specialty doctor",
+  "locally employed doctor",
+  "GP trainee",
+  "core trainee"
+];
+
+function parseXmlJobs(xmlText) {
+  const jobs = [];
+  // Extract all <job> blocks
+  const jobBlocks = [...xmlText.matchAll(/<job>([\s\S]*?)<\/job>/gi)];
+  for (const block of jobBlocks) {
+    const inner = block[1];
+    const get = (tag) => {
+      const m = inner.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+      return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim() : "";
+    };
+    const id = get("id") || get("jobId") || get("vacancyId");
+    const title = get("jobTitle") || get("title");
+    const employer = get("organisationName") || get("employer");
+    const location = get("locationName") || get("location");
+    const salaryMin = get("salaryMin") || get("salary");
+    const salaryMax = get("salaryMax");
+    const closing = get("closingDate");
+    const url = get("jobUrl") || get("url");
+    if (id && title) {
+      jobs.push({ id, title, employer, location, salaryMin, salaryMax, closing, url });
+    }
+  }
+  return jobs;
 }
-
-// ── Scraper ───────────────────────────────────────────────────────────────────
-// Correctly scoped to the Medical and Dental sector only (s2)
-const TARGET_URL = "https://www.healthjobsuk.com/job_list/s2";
-
-// HealthJobsUK blocks direct requests from cloud/serverless IP ranges (Vercel
-// included) with an HTTP 403. Fetching it directly from a Vercel function does
-// not work no matter what headers are sent — this was confirmed in production.
-// Workaround: route the fetch through Jina AI's free Reader proxy (r.jina.ai),
-// which fetches the page from its own infrastructure and returns clean,
-// pre-rendered Markdown instead of raw HTML. This sidesteps the IP block
-// entirely and also means we don't need cheerio/CSS selectors at all — we
-// parse the consistent Markdown link syntax instead, which has proven stable
-// across every manual fetch of this page so far.
-const READER_URL = `https://r.jina.ai/${TARGET_URL}`;
 
 async function scrapeJobs() {
-  try {
-    const { data } = await axios.get(READER_URL, {
-      headers: {
-        "Accept": "text/plain, text/markdown, */*",
-        "X-No-Cache": "true"
-      },
-      timeout: 30000
-    });
+  const allJobs = [];
+  const seenIds = new Set();
+  let totalLinks = 0;
+  let error = null;
 
-    const text = typeof data === "string" ? data : JSON.stringify(data);
-    const rawHtmlLength = text.length;
-
-    // Markdown link format consistently seen for real job listings:
-    //   1. [Job Title NHS Medical & Dental: GradeEmployer , LocationSpeciality: XSalary: £Y](https://www.healthjobsuk.com/job/.../Slug-v1234567 "Job Title")
-    // We match every markdown link pointing at a /job/ URL with a -v<digits> suffix.
-    const linkPattern = /\[([^\]]+)\]\((https:\/\/www\.healthjobsuk\.com\/job\/[^\s)]*-v(\d+))(?:\s+"[^"]*")?\)/g;
-    const matches = [...text.matchAll(linkPattern)];
-    const totalJobLinksFound = matches.length;
-    const jobs = [];
-
-    for (const m of matches) {
-      const linkText = m[1].trim();   // the full concatenated text inside [ ]
-      const url = m[2].trim();
-      const jobId = m[3];
-
-      if (!linkText || linkText.length < 4) continue;
-
-      // The link text itself contains: Title + Grade + Employer + Location +
-      // Speciality + Salary all concatenated with no separators, exactly like
-      // the container text we previously extracted via cheerio. Same parsing
-      // approach applies directly.
-      const grade = linkText;
-
-      // The job title is everything before the grade/employer block starts.
-      // Real grade markers that reliably start right after the title:
-      //   "NHS Medical & Dental:", a bare grade word, or an employer name
-      // We can't perfectly isolate just the title from concatenated text, so
-      // for filtering purposes we use the whole linkText (matches old logic).
-      // For DISPLAY purposes we try to cut at the first capital-letter run
-      // that looks like "NHS Medical & Dental:" or before "Speciality:".
-      // Title extraction is best-effort cosmetic display only — it never affects
-      // filtering, since grade/salary matching always runs against the full
-      // linkText. Priority 1: explicit "NHS Medical & Dental:" marker (most
-      // common, most reliable). Priority 2: a bare grade word/phrase that
-      // appears twice in a row right after the title (e.g. "...Specialty Doctor
-      // Specialty Doctor Trust Name"). Priority 3: fallback to truncation.
-      let title = linkText;
-      const ndMatch = linkText.match(/^(.*?)NHS Medical & Dental:/);
-      if (ndMatch && ndMatch[1].length > 4) {
-        title = ndMatch[1].trim();
-      } else {
-        const commaIdx = linkText.search(/\s*,\s*[A-Za-z]/);
-        const beforeComma = commaIdx > -1 ? linkText.substring(0, commaIdx) : linkText;
-        const BARE_GRADES = ["Specialty Doctor", "Consultant", "Locum Consultant", "Specialist Grade", "Registrar"];
-        let found = false;
-        for (const g of BARE_GRADES) {
-          const firstIdx = beforeComma.indexOf(g);
-          const secondIdx = firstIdx > -1 ? beforeComma.indexOf(g, firstIdx + g.length) : -1;
-          if (firstIdx > 3 && secondIdx > -1) {
-            title = linkText.substring(0, firstIdx).trim();
-            found = true;
-            break;
-          }
-        }
-        if (!found) title = linkText.substring(0, 100).trim();
-      }
-      if (!title || title.length < 4) continue;
-
-      const specialityMatch = linkText.match(/Speciality:\s*([^£]+?)(?=Salary:|$)/i);
-      const salaryMatch = linkText.match(/Salary:\s*([^]*?)$/i);
-      const displaySnippet = [
-        specialityMatch ? `Speciality: ${specialityMatch[1].trim()}` : null,
-        salaryMatch ? `Salary: ${salaryMatch[1].trim().substring(0, 80)}` : null
-      ].filter(Boolean).join(" · ");
-
-      const employerLocMatch = linkText.match(/([A-Z][A-Za-z&,.'’\- ]{4,60}?)\s*,\s*([A-Za-z&,.'’\- ]{2,40}?)Speciality:/);
-      let employer = employerLocMatch ? employerLocMatch[1].trim() : "";
-      const location = employerLocMatch ? employerLocMatch[2].trim() : "";
-      const halfLen = Math.floor(employer.length / 2);
-      if (halfLen > 5 && employer.substring(0, halfLen).trim() === employer.substring(halfLen).trim()) {
-        employer = employer.substring(0, halfLen).trim();
-      }
-
-      jobs.push({
-        id: jobId,
-        title,
-        employer,
-        location,
-        grade,
-        displaySnippet,
-        closing: "",
-        url: url.split("?")[0]
+  for (const keyword of SEARCH_KEYWORDS) {
+    try {
+      const { data } = await axios.get("https://www.jobs.nhs.uk/api/v1/search_xml", {
+        params: { keyword, page: 1 },
+        headers: { "Accept": "application/xml, text/xml, */*", "User-Agent": "Mozilla/5.0" },
+        timeout: 15000
       });
+      const text = typeof data === "string" ? data : JSON.stringify(data);
+      const jobs = parseXmlJobs(text);
+      totalLinks += jobs.length;
+      for (const j of jobs) {
+        if (!seenIds.has(j.id)) { seenIds.add(j.id); allJobs.push(j); }
+      }
+      // small delay between requests
+      await new Promise(r => setTimeout(r, 500));
+    } catch (e) {
+      error = e.message;
+      console.error(`[Scraper] keyword="${keyword}" error:`, e.message);
     }
-
-    // De-duplicate by job ID (same job can appear via multiple link wrappers)
-    const seen = new Set();
-    const deduped = jobs.filter(j => {
-      if (seen.has(j.id)) return false;
-      seen.add(j.id);
-      return true;
-    });
-
-    return { jobs: deduped, rawHtmlLength, totalJobLinksFound };
-  } catch (err) {
-    const status = err.response?.status;
-    const message = status
-      ? `HTTP ${status} ${err.response?.statusText || ""} from Jina Reader proxy — target site or proxy may be temporarily unavailable`
-      : err.message;
-    console.error("[Scraper] Error:", message);
-    return { jobs: [], error: message, httpStatus: status };
   }
+
+  return { jobs: allJobs, rawHtmlLength: totalLinks * 200, totalJobLinksFound: totalLinks, error: allJobs.length === 0 ? error : null };
 }
 
 // ── Email ─────────────────────────────────────────────────────────────────────
-async function sendEmailAlert(recipient, newJobs) {
+async function sendEmailAlert(recipient, jobs) {
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return false;
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
   });
 
-  const jobCards = newJobs.map(j => `
+  const cards = jobs.map(j => {
+    const salaryText = j.salaryMin ? `£${parseFloat(j.salaryMin).toLocaleString()}${j.salaryMax && j.salaryMax !== j.salaryMin ? ` – £${parseFloat(j.salaryMax).toLocaleString()}` : ""} per annum` : "";
+    return `
     <div style="padding:16px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;">
       <a href="${j.url}" style="color:#0d9488;font-weight:600;font-size:15px;text-decoration:none;">${j.title}</a>
       ${j.employer ? `<div style="font-size:13px;color:#374151;margin-top:4px;">${j.employer}${j.location ? " · " + j.location : ""}</div>` : ""}
-      ${j.displaySnippet ? `<div style="font-size:12px;color:#6b7280;margin-top:6px;">${j.displaySnippet}</div>` : ""}
-    </div>`).join("");
+      <div style="font-size:12px;color:#6b7280;margin-top:6px;display:flex;gap:16px;flex-wrap:wrap;">
+        ${salaryText ? `<span>💷 ${salaryText}</span>` : ""}
+        ${j.closing ? `<span>📅 Closes ${j.closing}</span>` : ""}
+      </div>
+    </div>`;
+  }).join("");
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;margin:0;padding:24px;">
 <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
   <div style="background:linear-gradient(135deg,#0f5132,#0d9488);padding:28px 32px;">
     <h1 style="color:#fff;margin:0;font-size:22px;">🩺 New Junior Doctor Jobs</h1>
-    <p style="color:#bbf7d0;margin:6px 0 0;">${newJobs.length} new position${newJobs.length > 1 ? "s" : ""} on HealthJobsUK</p>
+    <p style="color:#bbf7d0;margin:6px 0 0;">${jobs.length} new position${jobs.length > 1 ? "s" : ""} on NHS Jobs</p>
   </div>
   <div style="padding:24px 32px;">
-    ${jobCards}
-    <div style="margin-top:12px;padding:16px;background:#f0fdfa;border-radius:8px;border-left:4px solid #0d9488;">
-      <p style="margin:0;font-size:13px;color:#374151;"><strong>Tip:</strong> Apply early — junior NHS posts fill quickly.<br>
-      <a href="https://www.healthjobsuk.com/job_list/s2" style="color:#0d9488;">View all Medical &amp; Dental vacancies →</a></p>
+    ${cards}
+    <div style="margin-top:12px;padding:16px;background:#f0fdfa;border-radius:8px;border-left:4px solid #0d9488;font-size:13px;color:#374151;">
+      <strong>Tip:</strong> Apply early — junior NHS posts fill quickly.<br>
+      <a href="https://www.jobs.nhs.uk/candidate/search/results?keyword=junior+doctor&language=en" style="color:#0d9488;">View all on NHS Jobs →</a>
     </div>
-    <div style="margin-top:16px;padding:12px;background:#fff7ed;border-radius:8px;border-left:4px solid #fb923c;font-size:12px;color:#92400e;">
+    <div style="margin-top:12px;padding:10px;background:#fff7ed;border-radius:8px;font-size:12px;color:#92400e;">
       To unsubscribe, reply to this email with "unsubscribe" in the subject.
     </div>
   </div>
   <div style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e5e7eb;">
-    <p style="margin:0;font-size:12px;color:#9ca3af;">HealthJobsUK Alert · Junior Medical Vacancies · UK</p>
+    <p style="margin:0;font-size:12px;color:#9ca3af;">NHS Jobs Alert · Junior Medical Vacancies · UK</p>
   </div>
 </div></body></html>`;
 
   try {
     await transporter.sendMail({
-      from: `"HealthJobs Alert 🩺" <${process.env.GMAIL_USER}>`,
+      from: `"NHS Jobs Alert 🩺" <${process.env.GMAIL_USER}>`,
       to: recipient.email,
-      subject: `🩺 ${newJobs.length} New Junior Doctor Job${newJobs.length > 1 ? "s" : ""} on HealthJobsUK`,
+      subject: `🩺 ${jobs.length} New Junior Doctor Job${jobs.length > 1 ? "s" : ""} on NHS Jobs`,
       html
     });
     return true;
-  } catch (err) {
-    console.error("[Email] Failed:", err.message);
-    return false;
-  }
+  } catch(e) { console.error("[Email]", e.message); return false; }
 }
 
-async function sendConfirmationEmail(email) {
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return false;
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-  });
-  try {
-    await transporter.sendMail({
-      from: `"HealthJobs Alert 🩺" <${process.env.GMAIL_USER}>`,
-      to: email,
-      subject: "✅ You're subscribed to HealthJobs Alerts",
-      html: `<div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:32px;">
-        <h2 style="color:#0f5132;">✅ Subscription Confirmed</h2>
-        <p>You'll now receive alerts for new junior doctor vacancies on HealthJobsUK, based on the grades currently configured.</p>
-        <p style="color:#6b7280;font-size:13px;">To unsubscribe at any time, reply to any alert email with "unsubscribe".</p>
-      </div>`
-    });
-    return true;
-  } catch { return false; }
+async function sendConfirmation(email) {
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
+  const t = nodemailer.createTransport({ service: "gmail", auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD } });
+  try { await t.sendMail({ from: `"NHS Jobs Alert 🩺" <${process.env.GMAIL_USER}>`, to: email, subject: "✅ Subscribed to NHS Jobs Alerts", html: `<div style="font-family:sans-serif;padding:32px;max-width:500px;margin:0 auto"><h2 style="color:#0f5132">✅ You're subscribed!</h2><p>You'll receive alerts for new junior doctor vacancies on NHS Jobs matching your grade preferences.</p><p style="color:#6b7280;font-size:13px;">To unsubscribe, reply "unsubscribe" to any alert email.</p></div>` }); } catch {}
 }
 
 // ── Core scan ─────────────────────────────────────────────────────────────────
@@ -364,28 +257,27 @@ async function runScan() {
 
   const { jobs, error, rawHtmlLength, totalJobLinksFound } = await scrapeJobs();
   diag.rawJobsFound = jobs.length;
-  diag.sampleTitles = jobs.slice(0, 5).map(j => j.title);
   diag.rawHtmlLength = rawHtmlLength || 0;
   diag.totalJobLinksFound = totalJobLinksFound || 0;
+  diag.sampleTitles = jobs.slice(0, 5).map(j => j.title);
 
-  if (error) {
+  if (error && jobs.length === 0) {
     diag.error = error;
-    settings.lastError = error;
     settings.lastDiagnostics = diag;
     await dbSet("settings", settings);
     return;
   }
 
-  const selectedGrades = settings.selectedGrades || DEFAULT_SELECTED_GRADES;
+  const selectedGrades = settings.selectedGrades || DEFAULT_GRADES;
   const salaryMin = settings.salaryMin ?? DEFAULT_SALARY_MIN;
   const salaryMax = settings.salaryMax ?? DEFAULT_SALARY_MAX;
   const salaryFilterEnabled = settings.salaryFilterEnabled !== false;
 
-  const gradeFiltered = jobs.filter(j => shouldIncludeJob(j.title, j.grade, selectedGrades));
+  const gradeFiltered = jobs.filter(j => shouldInclude(j.title, selectedGrades));
   diag.afterGradeFilter = gradeFiltered.length;
 
   const filtered = salaryFilterEnabled
-    ? gradeFiltered.filter(j => passesSalaryFilter(j.grade, salaryMin, salaryMax))
+    ? gradeFiltered.filter(j => passesSalary(j.salaryMin, j.salaryMax, salaryMin, salaryMax))
     : gradeFiltered;
   diag.afterSalaryFilter = filtered.length;
 
@@ -393,8 +285,8 @@ async function runScan() {
   const newJobs = filtered.filter(j => !seenJobs[j.id]);
   diag.newAfterDedup = newJobs.length;
 
-  settings.lastError = null;
   settings.lastDiagnostics = diag;
+  settings.lastError = null;
   await dbSet("settings", settings);
 
   if (!newJobs.length) { console.log("[Scan] No new jobs", diag); return; }
@@ -404,7 +296,6 @@ async function runScan() {
 
   settings.totalJobsFound = (settings.totalJobsFound || 0) + newJobs.length;
   await dbSet("settings", settings);
-
   if (!settings.alertsEnabled) return;
 
   const recipients = ((await dbGet("recipients")) || []).filter(r => r.active);
@@ -421,31 +312,25 @@ async function runScan() {
   console.log(`[Scan] Alerted ${recipients.length} recipients about ${newJobs.length} jobs`);
 }
 
-// ── PUBLIC routes ─────────────────────────────────────────────────────────────
+// ── Public routes ─────────────────────────────────────────────────────────────
 app.post("/api/subscribe", async (req, res) => {
   const { email } = req.body;
   if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
   const recipients = (await dbGet("recipients")) || [];
   if (recipients.find(r => r.email.toLowerCase() === email.toLowerCase()))
     return res.json({ ok: true, message: "Already subscribed!" });
-  const newR = { id: Date.now().toString(), email: email.toLowerCase().trim(), active: true, addedAt: new Date().toISOString() };
-  recipients.push(newR);
+  recipients.push({ id: Date.now().toString(), email: email.toLowerCase().trim(), active: true, addedAt: new Date().toISOString() });
   await dbSet("recipients", recipients);
-  await sendConfirmationEmail(email);
+  await sendConfirmation(email);
   res.json({ ok: true, message: "Subscribed! Check your inbox for confirmation." });
 });
 
-app.get("/api/grade-options", (req, res) => {
-  const list = Object.entries(GRADE_OPTIONS).map(([key, v]) => ({ key, label: v.label }));
-  res.json(list);
-});
-
 app.all("/api/scan", async (req, res) => {
-  res.json({ ok: true, message: "Scan triggered", time: new Date().toISOString() });
+  res.json({ ok: true, time: new Date().toISOString() });
   runScan().catch(console.error);
 });
 
-// ── ADMIN routes ──────────────────────────────────────────────────────────────
+// ── Admin routes ──────────────────────────────────────────────────────────────
 app.get("/api/admin/status", adminAuth, async (req, res) => {
   const settings = await dbGet("settings");
   const recipients = await dbGet("recipients");
@@ -454,46 +339,38 @@ app.get("/api/admin/status", adminAuth, async (req, res) => {
   res.json({ settings, recipients, seenJobsCount: Object.keys(seenJobs || {}).length, recentAlerts: alertLog.slice(0, 20), gradeOptions: Object.entries(GRADE_OPTIONS).map(([key, v]) => ({ key, label: v.label })) });
 });
 
-app.get("/api/admin/recipients", adminAuth, async (req, res) => res.json(await dbGet("recipients") || []));
-
 app.delete("/api/admin/recipients/:id", adminAuth, async (req, res) => {
-  let recipients = (await dbGet("recipients")) || [];
-  recipients = recipients.filter(r => r.id !== req.params.id);
-  await dbSet("recipients", recipients);
-  res.json({ ok: true });
+  let r = (await dbGet("recipients")) || [];
+  r = r.filter(x => x.id !== req.params.id);
+  await dbSet("recipients", r); res.json({ ok: true });
 });
 
 app.patch("/api/admin/recipients/:id", adminAuth, async (req, res) => {
-  const recipients = (await dbGet("recipients")) || [];
-  const idx = recipients.findIndex(r => r.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Not found" });
-  recipients[idx] = { ...recipients[idx], ...req.body };
-  await dbSet("recipients", recipients);
-  res.json(recipients[idx]);
+  const r = (await dbGet("recipients")) || [];
+  const i = r.findIndex(x => x.id === req.params.id);
+  if (i === -1) return res.status(404).json({ error: "Not found" });
+  r[i] = { ...r[i], ...req.body }; await dbSet("recipients", r); res.json(r[i]);
 });
 
 app.patch("/api/admin/settings", adminAuth, async (req, res) => {
-  const settings = (await dbGet("settings")) || {};
-  const updated = { ...settings, ...req.body };
-  await dbSet("settings", updated);
-  res.json(updated);
+  const s = (await dbGet("settings")) || {};
+  const u = { ...s, ...req.body }; await dbSet("settings", u); res.json(u);
 });
 
 app.post("/api/admin/reset-seen", adminAuth, async (req, res) => {
-  await dbSet("seenJobs", {});
-  res.json({ ok: true });
+  await dbSet("seenJobs", {}); res.json({ ok: true });
 });
 
 app.post("/api/admin/test-email", adminAuth, async (req, res) => {
   const { email } = req.body;
   const sent = await sendEmailAlert({ email }, [{
-    id: "test", title: "Foundation Year 1 (FY1) — Test Alert", employer: "NHS Test Trust",
-    location: "London", displaySnippet: "Speciality: General Medicine · Salary: £40,257 per annum", url: "https://www.healthjobsuk.com/job_list/s2"
+    id: "test", title: "Junior Clinical Fellow — Test Alert",
+    employer: "NHS Test Trust", location: "London",
+    salaryMin: "54499", salaryMax: "62831",
+    closing: "30 Jun 2026", url: "https://www.jobs.nhs.uk"
   }]);
   res.json({ sent });
 });
-
-app.get("/api/admin/alerts", adminAuth, async (req, res) => res.json(await dbGet("alertLog") || []));
 
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "../public/index.html")));
 
